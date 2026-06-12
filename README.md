@@ -1788,3 +1788,362 @@ print(np.round(output, 2))
 
 **Q5. À quoi sert le Multi-Head Attention par rapport à une seule "tête" d'attention ?**
 > Chaque "tête" projette Q, K, V dans un sous-espace différent et apprend potentiellement un type de relation différent (ex : une tête capture les relations syntaxiques sujet-verbe, une autre les relations de coréférence). Les sorties des différentes têtes sont concatenées puis projetées, donnant au modèle une représentation plus riche que celle d'une seule fonction d'attention.
+
+
+# Guide de Préparation Entretien Data Scientist
+## Partie 10 — Classification, Régression, Segmentation et autres tâches
+
+### 10.1 Vue d'ensemble des tâches
+
+| Tâche | Type de sortie | Exemple concret |
+|---|---|---|
+| **Classification binaire** | 1 label parmi 2 classes | Email spam / non-spam |
+| **Classification multiclasse** | 1 label parmi N classes (mutuellement exclusives) | Reconnaître un chiffre 0-9 (MNIST) |
+| **Classification multi-label** | Plusieurs labels possibles simultanément (non exclusifs) | Tagger un article avec ["politique", "économie", "international"] |
+| **Régression** | Valeur numérique continue | Prix d'une maison, température |
+| **Segmentation sémantique** | Classe attribuée à **chaque pixel** | Identifier "route", "voiture", "piéton" dans une image autonome |
+| **Segmentation d'instance** | Comme sémantique, mais distingue chaque **instance individuelle** d'un objet | Distinguer la "voiture 1" de la "voiture 2" (pas juste "voiture") |
+| **Segmentation panoptique** | Combine sémantique + instance : chaque pixel a une classe ET, pour les objets, un ID d'instance | Scène complète : fond (ciel, route) classé sémantiquement + chaque objet individuel identifié |
+| **Détection d'objets** | Boîtes englobantes (bounding boxes) + classe pour chaque objet | Détecter et localiser des piétons, voitures, vélos |
+| **Génération** | Nouveau contenu (texte, image, audio) | GPT générant un paragraphe, Stable Diffusion générant une image |
+| **Ranking** | Ordre de pertinence sur un ensemble d'items | Moteur de recherche classant les résultats par pertinence |
+| **Clustering** | Regroupement non supervisé | Segmentation clients |
+| **Anomaly Detection** | Identifier les observations atypiques | Détection de fraude, pannes machines |
+
+### 10.2 Illustration visuelle : classification vs segmentation vs détection
+
+```
+IMAGE ORIGINALE : photo de rue avec une voiture et un piéton
+
+┌─────────────────────────────────────────────┐
+│  CLASSIFICATION                              │
+│  Sortie : "voiture" (1 label pour toute      │
+│  l'image, peu importe la position)           │
+└─────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────┐
+│  DÉTECTION D'OBJETS                          │
+│  Sortie : [voiture: boîte (x1,y1,x2,y2),     │
+│            piéton: boîte (x1,y1,x2,y2)]      │
+│  ┌──────────┐                                │
+│  │ voiture  │      ┌────┐                    │
+│  └──────────┘      │piét│                    │
+│                     └────┘                    │
+└─────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────┐
+│  SEGMENTATION SÉMANTIQUE                     │
+│  Sortie : chaque pixel reçoit une classe     │
+│  (route / ciel / voiture / piéton...)        │
+│  ████████ route   ▓▓▓▓ voiture  ░░░░ piéton  │
+└─────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────┐
+│  SEGMENTATION D'INSTANCE / PANOPTIQUE        │
+│  Sortie : chaque pixel a une classe ET,      │
+│  pour les objets, un ID unique (voiture #1,  │
+│  piéton #1 distincts d'autres instances)     │
+└─────────────────────────────────────────────┘
+```
+
+### 10.3 Modèles célèbres par tâche
+
+| Tâche | Modèles de référence |
+|---|---|
+| **Classification d'images** | ResNet (He et al., 2015), EfficientNet, Vision Transformer (ViT) |
+| **Régression (tabulaire)** | XGBoost, LightGBM, Random Forest, modèles linéaires régularisés |
+| **Segmentation** | U-Net (biomédical), Mask R-CNN (instance), SAM - Segment Anything Model (Meta, 2023, segmentation "zero-shot") |
+| **Détection d'objets** | YOLO (v8, v9, v10 — temps réel), DETR (détection basée Transformer) |
+| **Classification NLP** | BERT, RoBERTa, DistilBERT (version compressée de BERT, ~40% plus petite, ~60% plus rapide, performance proche) |
+
+### 10.4 Code minimal par tâche
+
+#### Classification d'image (ResNet pré-entraîné)
+
+```python
+import torch
+from torchvision import models, transforms
+from PIL import Image
+
+model = models.resnet50(weights="IMAGENET1K_V2")
+model.eval()
+
+preprocess = transforms.Compose([
+    transforms.Resize(256),
+    transforms.CenterCrop(224),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
+
+img = Image.open("photo.jpg")
+input_tensor = preprocess(img).unsqueeze(0)
+
+with torch.no_grad():
+    output = model(input_tensor)
+    predicted_class = output.argmax(dim=1).item()
+
+print("Classe prédite (index ImageNet):", predicted_class)
+```
+
+#### Régression (XGBoost)
+
+```python
+import xgboost as xgb
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+import numpy as np
+
+X = np.random.rand(500, 5)
+y = X[:, 0] * 100 + X[:, 1] * 50 + np.random.normal(0, 5, 500)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+model = xgb.XGBRegressor(
+    n_estimators=200, max_depth=4, learning_rate=0.05, random_state=42
+)
+model.fit(X_train, y_train)
+preds = model.predict(X_test)
+
+print("RMSE:", np.sqrt(mean_squared_error(y_test, preds)))
+```
+
+#### Détection d'objets (YOLO via ultralytics)
+
+```python
+# Nécessite : pip install ultralytics
+from ultralytics import YOLO
+
+model = YOLO("yolov8n.pt")  # modèle pré-entraîné, version "nano"
+results = model("photo_rue.jpg")
+
+for result in results:
+    for box in result.boxes:
+        cls_id = int(box.cls)
+        conf = float(box.conf)
+        xyxy = box.xyxy.tolist()
+        print(f"Classe: {result.names[cls_id]}, confiance: {conf:.2f}, boîte: {xyxy}")
+```
+
+#### Segmentation (SAM - Segment Anything)
+
+```python
+# Nécessite : pip install segment-anything
+from segment_anything import sam_model_registry, SamPredictor
+import cv2
+
+sam = sam_model_registry["vit_b"](checkpoint="sam_vit_b_01ec64.pth")
+predictor = SamPredictor(sam)
+
+image = cv2.imread("photo.jpg")
+image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+predictor.set_image(image)
+
+# Segmentation à partir d'un point cliqué par l'utilisateur
+input_point = [[500, 375]]
+input_label = [1]  # 1 = point positif (objet d'intérêt)
+
+masks, scores, logits = predictor.predict(
+    point_coords=input_point,
+    point_labels=input_label,
+    multimask_output=True
+)
+print(f"{len(masks)} masques générés, scores: {scores}")
+```
+
+### Référence
+- He, K. et al. (2015) — *"Deep Residual Learning for Image Recognition"* (ResNet), ArXiv:1512.03385.
+- Kirillov, A. et al. (2023) — *"Segment Anything"* (SAM), Meta AI, ArXiv:2304.02643.
+- Carion, N. et al. (2020) — *"End-to-End Object Detection with Transformers"* (DETR), ArXiv:2005.12872.
+
+---
+
+## Questions d'entretien typiques — Partie 10
+
+**Q1. Quelle est la différence entre segmentation sémantique et segmentation d'instance ?**
+> La segmentation sémantique attribue une classe à chaque pixel sans distinguer les objets individuels (tous les pixels "voiture" ont la même étiquette, peu importe combien de voitures il y a). La segmentation d'instance distingue chaque objet individuel : "voiture #1" et "voiture #2" sont des instances séparées même si elles partagent la classe "voiture".
+
+**Q2. Donnez un exemple de tâche de classification multi-label et expliquez en quoi elle diffère du multiclasse.**
+> Le tagging d'articles de presse (un article peut être à la fois "politique" ET "international" ET "économie") est multi-label : plusieurs labels peuvent être vrais simultanément, et on utilise typiquement une activation sigmoïde par label avec `BCEWithLogitsLoss`. En multiclasse (ex : reconnaissance de chiffres MNIST), une seule classe est correcte par exemple, avec softmax + `CrossEntropyLoss`.
+
+**Q3. Pourquoi YOLO est-il privilégié pour la détection d'objets en temps réel ?**
+> YOLO ("You Only Look Once") traite l'image en une seule passe du réseau pour prédire simultanément toutes les boîtes et classes, contrairement aux approches en deux étapes (proposition de régions puis classification), ce qui le rend significativement plus rapide — adapté aux applications temps réel (vidéo, robotique).
+
+**Q4. Qu'est-ce qui rend SAM (Segment Anything) particulier par rapport aux modèles de segmentation classiques ?**
+> SAM est conçu pour la segmentation "zero-shot" : il peut segmenter des objets jamais vus pendant l'entraînement, à partir de prompts simples (points, boîtes, texte), sans nécessiter de ré-entraînement spécifique à chaque nouvelle catégorie d'objet — contrairement à U-Net ou Mask R-CNN qui sont entraînés sur un ensemble fixe de classes.
+
+**Q5. Pourquoi DistilBERT est-il intéressant en production par rapport à BERT ?**
+> DistilBERT est obtenu par distillation de connaissances (knowledge distillation) à partir de BERT : il conserve environ 97% des performances tout en étant ~40% plus petit et ~60% plus rapide en inférence, ce qui réduit les coûts et la latence en production, particulièrement important à grande échelle ou sur des appareils contraints.
+
+---
+
+## Partie 11 — Métriques d'évaluation
+
+### 11.1 Métriques de classification
+
+#### Matrice de confusion
+
+|  | Prédit Positif | Prédit Négatif |
+|---|---|---|
+| **Réel Positif** | Vrai Positif (TP) | Faux Négatif (FN) |
+| **Réel Négatif** | Faux Positif (FP) | Vrai Négatif (TN) |
+
+#### Tableau des métriques
+
+| Métrique | Formule | Quand l'utiliser | Piège à éviter |
+|---|---|---|---|
+| **Accuracy** | (TP+TN) / (TP+TN+FP+FN) | Classes équilibrées | Trompeuse sur données déséquilibrées (cf. Partie 5) |
+| **Precision** | TP / (TP+FP) | Le coût d'un faux positif est élevé (ex : marquer un email légitime comme spam) | Une précision élevée seule ne dit rien sur le nombre de positifs manqués (rappel) |
+| **Recall (rappel)** | TP / (TP+FN) | Le coût d'un faux négatif est élevé (ex : ne pas détecter un cancer) | Un rappel élevé seul peut cacher énormément de faux positifs |
+| **F1-Score** | 2·(Precision·Recall)/(Precision+Recall) | Compromis entre precision et recall, utile sur données déséquilibrées | Ne distingue pas un déséquilibre precision/recall (deux modèles avec F1 identique peuvent avoir des profils très différents) |
+| **ROC-AUC** | Aire sous la courbe ROC (TPR vs FPR à différents seuils) | Évaluer la capacité globale de discrimination, indépendamment du seuil | Peut être trompeur sur classes très déséquilibrées (reste "optimiste" même avec beaucoup de FP sur une classe négative énorme) |
+| **PR-AUC** | Aire sous la courbe Precision-Recall | Préférable au ROC-AUC quand la classe positive est rare | Moins intuitif à interpréter pour les non-spécialistes |
+| **MCC** (Matthews Correlation Coefficient) | (TP·TN − FP·FN) / √((TP+FP)(TP+FN)(TN+FP)(TN+FN)) | Métrique unique équilibrée, robuste même sur classes très déséquilibrées | Peu connue, parfois moins lisible pour les parties non-techniques |
+| **Log Loss** | −(1/N)·Σ[y·log(p) + (1−y)·log(1−p)] | Évaluer la **qualité des probabilités** prédites (calibration), pas juste la décision finale | Très sensible aux prédictions extrêmes et fausses (ex : prédire 0.999 pour un vrai négatif pénalise fortement) |
+
+#### Code complet
+
+```python
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score,
+    roc_auc_score, average_precision_score, matthews_corrcoef,
+    log_loss, confusion_matrix, ConfusionMatrixDisplay
+)
+import matplotlib.pyplot as plt
+import numpy as np
+
+y_true = np.array([1,0,1,1,0,0,1,0,1,0])
+y_pred = np.array([1,0,1,0,0,1,1,0,1,0])
+y_proba = np.array([0.9,0.2,0.8,0.4,0.3,0.6,0.7,0.1,0.85,0.25])
+
+print("Accuracy:", accuracy_score(y_true, y_pred))
+print("Precision:", precision_score(y_true, y_pred))
+print("Recall:", recall_score(y_true, y_pred))
+print("F1:", f1_score(y_true, y_pred))
+print("ROC-AUC:", roc_auc_score(y_true, y_proba))
+print("PR-AUC:", average_precision_score(y_true, y_proba))
+print("MCC:", matthews_corrcoef(y_true, y_pred))
+print("Log Loss:", log_loss(y_true, y_proba))
+
+cm = confusion_matrix(y_true, y_pred)
+ConfusionMatrixDisplay(cm, display_labels=["Négatif", "Positif"]).plot()
+plt.savefig("confusion_matrix.png")
+```
+
+#### Quand utiliser AUC vs F1 vs Accuracy
+
+- **Accuracy** : uniquement si les classes sont raisonnablement équilibrées et que tous les types d'erreurs ont un coût similaire (ex : reconnaissance de chiffres MNIST, ~10% par classe).
+- **ROC-AUC** : utile pour comparer des modèles indépendamment d'un seuil de décision, et quand les deux classes ont un effectif raisonnable. Exemple : scoring de crédit avec 30% de défauts.
+- **F1-Score / PR-AUC** : préférables quand la classe positive est **rare** et qu'on se concentre sur sa détection (fraude, défauts rares, maladies rares) — l'AUC-ROC peut sembler "bon" même si le modèle génère énormément de faux positifs en valeur absolue, simplement parce que la classe négative est immense.
+
+### 11.2 Métriques de régression
+
+| Métrique | Formule | Caractéristique |
+|---|---|---|
+| **MAE** (Mean Absolute Error) | (1/N)·Σ\|y−ŷ\| | Robuste aux outliers, interprétation directe (même unité que y) |
+| **MSE** (Mean Squared Error) | (1/N)·Σ(y−ŷ)² | Pénalise fortement les grandes erreurs (sensible aux outliers) |
+| **RMSE** (Root MSE) | √MSE | Même unité que y, pénalise les grandes erreurs comme MSE |
+| **R²** (coefficient de détermination) | 1 − (Σ(y−ŷ)² / Σ(y−ȳ)²) | Proportion de variance expliquée par le modèle (1 = parfait, 0 = équivalent à prédire la moyenne, peut être négatif si pire que la moyenne) |
+| **MAPE** (Mean Absolute Percentage Error) | (1/N)·Σ\|((y−ŷ)/y)\|·100 | Interprétation en pourcentage, mais **indéfini si y=0** et instable pour y proche de 0 |
+
+```python
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import numpy as np
+
+y_true = np.array([100, 150, 200, 250, 300])
+y_pred = np.array([110, 140, 210, 230, 320])
+
+mae = mean_absolute_error(y_true, y_pred)
+mse = mean_squared_error(y_true, y_pred)
+rmse = np.sqrt(mse)
+r2 = r2_score(y_true, y_pred)
+mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+
+print(f"MAE: {mae:.2f}, MSE: {mse:.2f}, RMSE: {rmse:.2f}, R²: {r2:.3f}, MAPE: {mape:.2f}%")
+```
+
+### 11.3 Métriques de segmentation
+
+- **IoU (Intersection over Union)** : aire d'intersection entre la prédiction et la vérité-terrain, divisée par l'aire de leur union. `IoU = 1` signifie un recouvrement parfait.
+- **Dice Coefficient** : `Dice = 2·|A∩B| / (|A|+|B|)`, mathématiquement très proche de l'IoU mais pondère différemment les erreurs (souvent privilégié en imagerie médicale).
+- **mAP (mean Average Precision)** : utilisé en détection/segmentation d'instance — moyenne de l'Average Precision sur toutes les classes, calculée à différents seuils d'IoU (ex : mAP@0.5, mAP@0.5:0.95).
+
+```python
+def iou_score(mask_pred, mask_true):
+    intersection = np.logical_and(mask_pred, mask_true).sum()
+    union = np.logical_or(mask_pred, mask_true).sum()
+    return intersection / union if union > 0 else 0
+
+def dice_score(mask_pred, mask_true):
+    intersection = np.logical_and(mask_pred, mask_true).sum()
+    return 2 * intersection / (mask_pred.sum() + mask_true.sum())
+
+mask_pred = np.array([[1,1,0],[1,1,0],[0,0,0]])
+mask_true = np.array([[1,1,1],[1,0,0],[0,0,0]])
+
+print("IoU:", iou_score(mask_pred, mask_true))
+print("Dice:", dice_score(mask_pred, mask_true))
+```
+
+### 11.4 Métriques NLP
+
+| Métrique | Usage | Description |
+|---|---|---|
+| **BLEU** | Traduction automatique | Mesure le recouvrement de n-grammes entre le texte généré et une (ou plusieurs) référence(s) humaine(s) — précision orientée |
+| **ROUGE** | Résumé automatique | Similaire à BLEU mais orienté rappel (recouvrement de n-grammes/séquences entre le résumé généré et le résumé de référence) |
+| **METEOR** | Traduction | Améliore BLEU en intégrant synonymes, racines de mots (stemming) et alignements partiels |
+| **BERTScore** | Génération de texte en général | Compare les **embeddings contextuels** (via BERT) du texte généré et de la référence, plutôt que des correspondances exactes de mots — capture mieux les paraphrases |
+| **Perplexity** | Modèles de langage | Mesure à quel point le modèle est "surpris" par le texte ; perplexité = exp(loss moyenne de cross-entropy). Plus c'est bas, mieux le modèle prédit la séquence |
+
+```python
+# Exemple BLEU avec NLTK
+from nltk.translate.bleu_score import sentence_bleu
+
+reference = [["le", "chat", "est", "sur", "le", "tapis"]]
+candidate = ["le", "chat", "est", "sur", "tapis"]
+
+score = sentence_bleu(reference, candidate)
+print("BLEU score:", score)
+```
+
+```python
+# Exemple Perplexity avec un modèle HuggingFace
+import torch
+from transformers import GPT2LMHeadModel, GPT2TokenizerFast
+
+model = GPT2LMHeadModel.from_pretrained("gpt2")
+tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+
+text = "The quick brown fox jumps over the lazy dog."
+inputs = tokenizer(text, return_tensors="pt")
+
+with torch.no_grad():
+    outputs = model(**inputs, labels=inputs["input_ids"])
+    loss = outputs.loss
+
+perplexity = torch.exp(loss)
+print(f"Perplexity: {perplexity.item():.2f}")
+```
+
+### Référence
+- Documentation : [scikit-learn.org/stable/modules/model_evaluation.html](https://scikit-learn.org/stable/modules/model_evaluation.html)
+- Papineni, K. et al. (2002) — *"BLEU: a Method for Automatic Evaluation of Machine Translation"*, ACL.
+- Zhang, T. et al. (2019) — *"BERTScore: Evaluating Text Generation with BERT"*, ArXiv:1904.09675.
+
+---
+
+## Questions d'entretien typiques — Partie 11
+
+**Q1. Dans quel scénario préférez-vous optimiser pour le rappel plutôt que la précision ?**
+> Quand le coût d'un faux négatif est très élevé par rapport à celui d'un faux positif — par exemple, le dépistage médical d'une maladie grave : il est préférable d'avoir quelques faux positifs (qui seront ré-examinés) plutôt que de manquer un vrai cas (faux négatif), qui pourrait avoir des conséquences graves.
+
+**Q2. Pourquoi le R² peut-il être négatif ?**
+> Le R² compare la performance du modèle à celle d'un modèle naïf qui prédirait toujours la moyenne de y. Si le modèle est pire que cette baseline (ses erreurs au carré sont supérieures à la variance totale de y), le R² devient négatif — signe d'un modèle très mal ajusté (souvent dû à une erreur de pipeline ou un overfitting massif sur le train).
+
+**Q3. Quelle est la différence entre IoU et Dice Coefficient ?**
+> Les deux mesurent le recouvrement entre deux masques, mais avec des formules légèrement différentes : IoU = |A∩B|/|A∪B|, Dice = 2|A∩B|/(|A|+|B|). Dice pondère plus favorablement les recouvrements partiels (le facteur 2 au numérateur) et est souvent préféré en imagerie médicale où les régions d'intérêt sont petites par rapport à l'image entière.
+
+**Q4. Pourquoi BERTScore est-il souvent préféré à BLEU pour évaluer des textes générés par des LLM modernes ?**
+> BLEU se base sur une correspondance exacte de n-grammes — il pénalise fortement les paraphrases ou reformulations correctes mais différentes lexicalement de la référence. BERTScore compare des embeddings contextuels, capturant la similarité sémantique même quand les mots utilisés diffèrent, ce qui correspond mieux à la qualité perçue par un humain.
+
+**Q5. Que mesure la perplexité, et pourquoi une perplexité faible est-elle souhaitable ?**
+> La perplexité mesure à quel point la distribution de probabilité prédite par le modèle est "surprise" par la séquence réelle observée — c'est l'exponentielle de la cross-entropy moyenne. Une perplexité faible signifie que le modèle attribue une probabilité élevée aux tokens réellement observés, donc qu'il modélise bien la distribution du langage du corpus évalué.
