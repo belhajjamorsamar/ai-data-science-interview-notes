@@ -1495,3 +1495,296 @@ for epoch in range(10):
 
 **Q5. Que se passe-t-il si le learning rate est trop élevé ? Trop faible ?**
 > Trop élevé : les mises à jour de poids "dépassent" le minimum à chaque étape, la loss peut osciller violemment ou diverger (devenir NaN). Trop faible : la convergence est extrêmement lente, et le modèle peut rester bloqué dans un minimum local ou un plateau pendant un budget d'entraînement limité.
+>
+> # Guide de Préparation Entretien Data Scientist
+## Partie 8 — Fine-Tuning
+
+### 8.1 Définition
+
+Le **fine-tuning** consiste à prendre un modèle **pré-entraîné** sur une grande quantité de données générales (ex : BERT entraîné sur Wikipedia + livres) et à poursuivre son entraînement sur un **jeu de données plus petit et spécifique** à une tâche cible (ex : classification de sentiments sur des avis clients).
+
+### 8.2 Pourquoi fine-tuner plutôt qu'entraîner from scratch
+
+| Argument | Explication |
+|---|---|
+| **Coût computationnel** | Pré-entraîner un modèle de type BERT/GPT depuis zéro nécessite des centaines de GPU pendant des semaines — inaccessible pour la grande majorité des projets |
+| **Quantité de données** | Le modèle pré-entraîné a déjà appris des représentations générales du langage (grammaire, sémantique, relations) à partir de milliards de tokens ; le fine-tuning n'a besoin que de quelques milliers d'exemples spécifiques pour adapter ces représentations à la tâche cible |
+| **Performance** | Le transfer learning permet souvent d'atteindre une meilleure performance qu'un modèle entraîné from scratch sur le petit dataset spécifique, car les représentations de bas niveau (syntaxe, sens des mots courants) sont déjà acquises |
+
+### 8.3 Types de fine-tuning
+
+| Type | Description | Coût mémoire/calcul |
+|---|---|---|
+| **Full fine-tuning** | Tous les paramètres du modèle sont mis à jour | Très élevé (équivalent à l'entraînement complet) |
+| **Feature extraction** | Le modèle pré-entraîné est "figé" (freeze) ; seule une nouvelle tête (couche de classification) ajoutée au-dessus est entraînée | Faible — rapide, mais performance souvent inférieure au full fine-tuning |
+| **LoRA** (Low-Rank Adaptation) | Insère de petites matrices de rang faible dans certaines couches (attention notamment) ; seules ces matrices sont entraînées, le modèle de base reste figé | Très faible — réduit le nombre de paramètres entraînables de plusieurs ordres de grandeur |
+| **QLoRA** | LoRA appliqué sur un modèle de base **quantifié** (ex : en 4-bit), permettant de fine-tuner des modèles de plusieurs dizaines de milliards de paramètres sur un seul GPU grand public | Très faible (mémoire) |
+| **PEFT** (Parameter-Efficient Fine-Tuning) | Terme générique englobant LoRA, QLoRA, prefix-tuning, prompt-tuning, adapters — toutes les techniques qui n'entraînent qu'une petite fraction des paramètres | Variable, toujours réduit |
+
+### 8.4 Problèmes que résout le fine-tuning
+
+- **Manque de données** : on n'a pas besoin de millions d'exemples annotés pour la tâche spécifique
+- **Coût computationnel** : pas besoin de ré-entraîner toutes les couches (surtout avec PEFT/LoRA)
+- **Catastrophic forgetting** (à surveiller) : un full fine-tuning trop agressif peut faire "oublier" au modèle ses connaissances générales — un argument de plus en faveur de LoRA, qui préserve les poids originaux intacts
+
+### 8.5 Exemple : fine-tuner BERT pour classification de sentiments
+
+```python
+from transformers import (
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    TrainingArguments,
+    Trainer
+)
+from datasets import load_dataset
+import numpy as np
+from sklearn.metrics import accuracy_score, f1_score
+
+# 1. Charger le dataset (exemple : IMDB - critiques de films, positif/négatif)
+dataset = load_dataset("imdb")
+
+# 2. Tokenizer et modèle pré-entraîné
+model_name = "bert-base-uncased"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
+
+# 3. Tokenisation du dataset
+def tokenize_function(examples):
+    return tokenizer(examples["text"], padding="max_length", truncation=True, max_length=256)
+
+tokenized_datasets = dataset.map(tokenize_function, batched=True)
+
+train_dataset = tokenized_datasets["train"].shuffle(seed=42).select(range(2000))  # sous-échantillon pour exemple
+eval_dataset = tokenized_datasets["test"].shuffle(seed=42).select(range(500))
+
+# 4. Métriques
+def compute_metrics(eval_pred):
+    logits, labels = eval_pred
+    predictions = np.argmax(logits, axis=-1)
+    return {
+        "accuracy": accuracy_score(labels, predictions),
+        "f1": f1_score(labels, predictions)
+    }
+
+# 5. Configuration de l'entraînement
+training_args = TrainingArguments(
+    output_dir="./results",
+    learning_rate=2e-5,
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
+    num_train_epochs=3,
+    weight_decay=0.01,
+    evaluation_strategy="epoch",
+    save_strategy="epoch",
+    load_best_model_at_end=True,
+)
+
+# 6. Trainer
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=eval_dataset,
+    compute_metrics=compute_metrics,
+)
+
+trainer.train()
+```
+
+### 8.6 Exemple : LoRA avec PEFT (fine-tuning efficace)
+
+```python
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from peft import LoraConfig, get_peft_model, TaskType
+
+model_name = "bert-base-uncased"
+model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
+
+# Configuration LoRA
+lora_config = LoraConfig(
+    task_type=TaskType.SEQ_CLS,
+    r=8,                       # rang des matrices LoRA (plus petit = moins de paramètres)
+    lora_alpha=16,             # facteur d'échelle
+    lora_dropout=0.1,
+    target_modules=["query", "value"]  # couches d'attention ciblées
+)
+
+# Application de LoRA : la majorité du modèle reste figée
+peft_model = get_peft_model(model, lora_config)
+
+# Affiche le nombre de paramètres entraînables vs total
+peft_model.print_trainable_parameters()
+# -> trainable params: ~300K || all params: ~110M || trainable%: ~0.27%
+```
+
+**Intuition LoRA** : au lieu de modifier directement une grande matrice de poids `W` (taille d × d, des millions de valeurs), on apprend deux petites matrices `A` (d × r) et `B` (r × d) avec `r << d`, telles que la mise à jour effective soit `W + A·B`. Le nombre de paramètres entraînables passe de `d²` à `2·d·r` — une réduction massive si `r` est petit (ex : 8 ou 16).
+
+### Référence
+- Howard, J. & Ruder, S. (2018) — *"Universal Language Model Fine-tuning for Text Classification"* (ULMFiT), ACL. Premier travail majeur à démocratiser le fine-tuning de modèles de langage pour la classification de texte.
+- Hu, E. et al. (2021) — *"LoRA: Low-Rank Adaptation of Large Language Models"*, ArXiv:2106.09685.
+- Dettmers, T. et al. (2023) — *"QLoRA: Efficient Finetuning of Quantized LLMs"*, ArXiv:2305.14314.
+- Documentation : [huggingface.co/docs/peft](https://huggingface.co/docs/peft)
+
+---
+
+## Questions d'entretien typiques — Partie 8
+
+**Q1. Quelle est la différence entre feature extraction et full fine-tuning ?**
+> En feature extraction, le modèle pré-entraîné est figé (ses poids ne changent pas) et seule une nouvelle couche ajoutée au-dessus est entraînée. En full fine-tuning, tous les poids du modèle (y compris les couches pré-entraînées) sont mis à jour pendant l'entraînement sur la nouvelle tâche.
+
+**Q2. Comment LoRA réduit-il drastiquement le nombre de paramètres entraînables ?**
+> LoRA remplace la mise à jour directe d'une matrice de poids de taille d×d par le produit de deux matrices de rang faible A (d×r) et B (r×d), avec r très petit comparé à d. Le modèle original reste figé, et seules A et B (quelques centaines de milliers de paramètres au lieu de millions/milliards) sont entraînées.
+
+**Q3. Qu'apporte QLoRA par rapport à LoRA ?**
+> QLoRA combine LoRA avec une quantification du modèle de base (typiquement en 4-bit), réduisant drastiquement l'empreinte mémoire — ce qui permet de fine-tuner des modèles de dizaines de milliards de paramètres sur un seul GPU grand public (ex : 24 Go de VRAM), alors que le full fine-tuning nécessiterait plusieurs centaines de Go.
+
+**Q4. Qu'est-ce que le "catastrophic forgetting" et comment le fine-tuning par LoRA l'atténue-t-il ?**
+> C'est le phénomène où un modèle, en étant fine-tuné de manière trop agressive sur une nouvelle tâche, "oublie" les connaissances générales acquises pendant le pré-entraînement. Comme LoRA laisse les poids originaux intacts et n'ajoute qu'une petite perturbation, le risque de catastrophic forgetting est fortement réduit par rapport au full fine-tuning.
+
+**Q5. Pourquoi le fine-tuning nécessite-t-il généralement un learning rate beaucoup plus faible que le pré-entraînement ?**
+> Parce que le modèle possède déjà des représentations utiles et bien initialisées ; un learning rate élevé risquerait de détruire rapidement ces représentations (catastrophic forgetting) avant même d'avoir convergé vers la nouvelle tâche. Des valeurs typiques sont de l'ordre de 1e-5 à 5e-5 pour BERT, contre 1e-4 à 1e-3 pour un entraînement from scratch.
+
+---
+
+## Partie 9 — Architecture Transformer
+
+### 9.1 Origine et problème résolu
+
+L'architecture **Transformer** a été introduite dans l'article fondateur *"Attention Is All You Need"* (Vaswani et al., 2017, ArXiv:1706.03762).
+
+**Problème résolu** : avant les Transformers, le NLP reposait sur des **RNN** (Recurrent Neural Networks) et **LSTM**, qui traitent les séquences token par token, séquentiellement. Cela posait deux problèmes majeurs :
+1. **Lenteur** : impossible de paralléliser le traitement de la séquence (chaque étape dépend de la précédente)
+2. **Oubli à long terme** : même avec les LSTM, l'information des tokens lointains se dilue au fil des étapes (vanishing gradient sur de longues séquences)
+
+Le Transformer résout les deux en remplaçant la récurrence par le **mécanisme d'attention**, qui permet à chaque token d'accéder directement à tous les autres tokens de la séquence, en parallèle.
+
+### 9.2 Architecture complète
+
+```
+                    TRANSFORMER (architecture encoder-decoder)
+
+  ┌─────────────────────────────┐      ┌─────────────────────────────┐
+  │           ENCODER            │      │           DECODER            │
+  │                               │      │                               │
+  │  Input Embedding              │      │  Output Embedding             │
+  │       +                       │      │       +                       │
+  │  Positional Encoding          │      │  Positional Encoding          │
+  │       ↓                       │      │       ↓                       │
+  │  ┌─────────────────────┐     │      │  ┌─────────────────────┐     │
+  │  │ Multi-Head           │     │      │  │ Masked Multi-Head    │     │
+  │  │ Self-Attention       │     │      │  │ Self-Attention       │     │
+  │  └─────────────────────┘     │      │  └─────────────────────┘     │
+  │       ↓ (+ residual, norm)    │      │       ↓ (+ residual, norm)    │
+  │  ┌─────────────────────┐     │      │  ┌─────────────────────┐     │
+  │  │ Feed-Forward Network  │     │ ───► │  │ Encoder-Decoder      │     │
+  │  │ (FFN)                 │     │      │  │ Cross-Attention      │     │
+  │  └─────────────────────┘     │      │  └─────────────────────┘     │
+  │       ↓ (+ residual, norm)    │      │       ↓ (+ residual, norm)    │
+  │   [répété N fois]              │      │  ┌─────────────────────┐     │
+  │       ↓                       │      │  │ Feed-Forward Network  │     │
+  │  Sortie encodeur               │      │  └─────────────────────┘     │
+  └─────────────────────────────┘      │       ↓ (+ residual, norm)    │
+                                          │   [répété N fois]              │
+                                          │       ↓                       │
+                                          │  Linear + Softmax              │
+                                          │  (probabilités sur le vocab)   │
+                                          └─────────────────────────────┘
+```
+
+**Composants clés** :
+- **Embedding** : transforme chaque token (mot/sous-mot) en vecteur dense
+- **Positional Encoding** : injecte l'information de **position** dans la séquence (puisque l'attention seule est invariante à l'ordre — sans positional encoding, "le chat mange la souris" et "la souris mange le chat" seraient indistinguables)
+- **Multi-Head Attention** : plusieurs "têtes" d'attention en parallèle, chacune apprenant à capturer différents types de relations (syntaxiques, sémantiques, etc.)
+- **Feed-Forward Network (FFN)** : réseau dense appliqué indépendamment à chaque position, ajoutant de la capacité de transformation non-linéaire
+- **Residual connections + Layer Normalization** : facilitent l'entraînement de réseaux très profonds en stabilisant les gradients
+
+### 9.3 Le mécanisme d'attention, étape par étape
+
+**Formule** :
+```
+Attention(Q, K, V) = softmax(Q·K^T / √d_k) · V
+```
+
+**Étapes** :
+1. Chaque token de la séquence d'entrée est projeté en trois vecteurs : **Query (Q)**, **Key (K)**, **Value (V)**, via trois matrices de poids apprises.
+2. On calcule le produit scalaire entre la Query d'un token et les Keys de tous les tokens (`Q·K^T`) — cela mesure la "similarité"/"pertinence" entre ce token et tous les autres.
+3. On divise par `√d_k` (dimension des vecteurs Key) — cette mise à l'échelle évite que les produits scalaires deviennent trop grands, ce qui saturerait le softmax.
+4. On applique un **softmax** sur ces scores — ils deviennent des poids d'attention qui somment à 1.
+5. On effectue une moyenne pondérée des Values (`V`) avec ces poids — le résultat est une nouvelle représentation du token, enrichie par le contexte des autres tokens pertinents.
+
+**Intuition** : *"chaque mot regarde tous les autres mots et décide à qui prêter attention"*. Dans la phrase "Le chat a mangé sa pâtée parce qu'il avait faim", le mot "il" doit "regarder" et accorder une forte attention à "chat" pour résoudre la référence (coréférence) — l'attention apprend automatiquement ce type de relation, sans règle linguistique codée à la main.
+
+### 9.4 Exemple de self-attention en NumPy
+
+```python
+import numpy as np
+
+def softmax(x, axis=-1):
+    e_x = np.exp(x - np.max(x, axis=axis, keepdims=True))
+    return e_x / np.sum(e_x, axis=axis, keepdims=True)
+
+# Séquence de 4 tokens, dimension d'embedding = 8
+np.random.seed(42)
+seq_len, d_model = 4, 8
+X = np.random.randn(seq_len, d_model)
+
+# Matrices de projection apprises (initialisées aléatoirement ici)
+d_k = 8
+W_q = np.random.randn(d_model, d_k)
+W_k = np.random.randn(d_model, d_k)
+W_v = np.random.randn(d_model, d_k)
+
+# Projections
+Q = X @ W_q   # (seq_len, d_k)
+K = X @ W_k   # (seq_len, d_k)
+V = X @ W_v   # (seq_len, d_k)
+
+# Scores d'attention : similarité entre chaque paire de tokens
+scores = Q @ K.T / np.sqrt(d_k)   # (seq_len, seq_len)
+
+# Poids d'attention (somme à 1 sur chaque ligne)
+attention_weights = softmax(scores, axis=-1)
+
+# Sortie : moyenne pondérée des Values
+output = attention_weights @ V   # (seq_len, d_k)
+
+print("Poids d'attention (chaque ligne = un token, somme = 1):")
+print(np.round(attention_weights, 2))
+print("\nSortie de l'attention (nouvelles représentations contextualisées):")
+print(np.round(output, 2))
+```
+
+### 9.5 BERT, GPT, T5/BART : trois familles d'architectures
+
+| Modèle | Architecture | Objectif d'entraînement | Tâches typiques |
+|---|---|---|---|
+| **BERT** | Encoder uniquement | Masked Language Modeling (prédire des tokens masqués, vision **bidirectionnelle** du contexte) | Classification, NER, extraction de réponses (QA extractif), embeddings de phrases |
+| **GPT** | Decoder uniquement | Causal Language Modeling (prédire le token suivant, vision **unidirectionnelle**/gauche-à-droite) | Génération de texte, chatbots, complétion de code |
+| **T5 / BART** | Encoder-decoder complet | Seq2Seq (l'encodeur lit la séquence d'entrée en entier, le décodeur génère la sortie token par token en s'appuyant sur l'encodeur via cross-attention) | Traduction, résumé, génération conditionnée par un texte source |
+
+**Pourquoi BERT est "bidirectionnel" et GPT "unidirectionnel"** : BERT, lors du pré-entraînement (Masked LM), peut voir les tokens **avant ET après** le mot masqué — son attention n'est pas restreinte. GPT, pour rester cohérent avec sa tâche de génération (prédire le mot suivant), utilise une **attention masquée** (causal mask) qui empêche un token de "voir" les tokens qui le suivent — sinon il "tricherait" en regardant la réponse qu'il doit prédire.
+
+### Référence
+- Vaswani, A. et al. (2017) — *"Attention Is All You Need"*, ArXiv:1706.03762. Article fondateur de l'architecture Transformer.
+- Devlin, J. et al. (2018) — *"BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"*, ArXiv:1810.04805.
+- Radford, A. et al. (2018/2019) — *"Improving Language Understanding by Generative Pre-Training"* (GPT) / *"Language Models are Unsupervised Multitask Learners"* (GPT-2), OpenAI.
+- Cours : Stanford CS224N — *Natural Language Processing with Deep Learning*.
+
+---
+
+## Questions d'entretien typiques — Partie 9
+
+**Q1. Pourquoi la division par √d_k dans la formule d'attention ?**
+> Sans cette mise à l'échelle, les produits scalaires Q·K^T peuvent devenir très grands en valeur absolue lorsque d_k augmente (la variance du produit scalaire croît avec la dimension), ce qui pousse le softmax dans des régions où ses gradients sont quasi nuls (saturation). Diviser par √d_k maintient les scores dans une plage où le softmax reste bien comporté.
+
+**Q2. À quoi sert le Positional Encoding et pourquoi est-il nécessaire ?**
+> Le mécanisme d'attention est, par construction, invariant à l'ordre des tokens (il traite la séquence comme un ensemble). Le Positional Encoding ajoute une information de position à chaque embedding, permettant au modèle de distinguer "le chat mange la souris" de "la souris mange le chat".
+
+**Q3. Quelle est la différence fondamentale entre BERT et GPT en termes d'attention ?**
+> BERT utilise une attention bidirectionnelle complète (chaque token voit tous les autres, avant et après). GPT utilise une attention causale/masquée, où chaque token ne peut voir que les tokens précédents — nécessaire pour une génération séquentielle cohérente (pas de "vue sur le futur").
+
+**Q4. Pourquoi le Transformer a-t-il remplacé les RNN/LSTM en NLP ?**
+> Les RNN traitent les séquences de manière strictement séquentielle, ce qui empêche la parallélisation et provoque une dégradation de l'information sur de longues séquences (vanishing gradient). Le Transformer, via l'attention, permet à chaque token d'accéder directement à tous les autres en une seule opération matricielle, parallélisable sur GPU, et sans dégradation liée à la distance dans la séquence.
+
+**Q5. À quoi sert le Multi-Head Attention par rapport à une seule "tête" d'attention ?**
+> Chaque "tête" projette Q, K, V dans un sous-espace différent et apprend potentiellement un type de relation différent (ex : une tête capture les relations syntaxiques sujet-verbe, une autre les relations de coréférence). Les sorties des différentes têtes sont concatenées puis projetées, donnant au modèle une représentation plus riche que celle d'une seule fonction d'attention.
