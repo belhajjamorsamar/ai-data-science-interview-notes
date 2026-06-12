@@ -2528,3 +2528,191 @@ report.save_html("data_drift_report.html")
 
 **Q5. Pourquoi versionner les modèles (via MLflow ou équivalent) est-il important en production ?**
 > Cela permet de tracer quel modèle (avec quels hyperparamètres, quelles données d'entraînement, quelles métriques) est déployé à un instant donné, de revenir rapidement à une version antérieure en cas de problème (rollback), et d'assurer la reproductibilité et l'auditabilité des décisions du modèle — particulièrement important dans des contextes réglementés.
+>
+> # Guide de Préparation Entretien Data Scientist
+## Partie 13 — NLP : Natural Language Processing
+
+### 13.1 Définition et historique
+
+Le **NLP (Natural Language Processing / Traitement Automatique du Langage Naturel)** est le domaine de l'IA dédié à la compréhension, l'analyse et la génération de langage humain (texte ou parole).
+
+**Évolution historique** :
+
+```
+Années 1950-1980     1990-2010              2010-2017            2017-aujourd'hui
+─────────────────    ─────────────────      ──────────────       ──────────────────
+Règles linguistiques  Méthodes statistiques  Deep Learning        Transformers
+écrites à la main     (n-grammes, HMM,       (RNN, LSTM,          (BERT, GPT,
+(systèmes experts,    modèles de Markov,     Word2Vec, GloVe)     T5, LLM modernes)
+grammaires formelles) Naive Bayes pour la
+                       classification)
+```
+
+- **Règles** : systèmes basés sur des grammaires écrites manuellement par des linguistes — rigides, ne généralisent pas aux exceptions et variations naturelles du langage.
+- **Statistique** : apprentissage de probabilités à partir de corpus (ex : modèles n-grammes pour prédire le mot suivant selon les N mots précédents) — meilleure généralisation mais représentations "creuses" (sparse), pas de notion de similarité sémantique entre mots.
+- **Deep Learning** : les réseaux de neurones (RNN/LSTM) et les **word embeddings** (Word2Vec, GloVe) introduisent des représentations denses capturant la similarité sémantique, mais restent séquentiels et limités sur le contexte long.
+- **Transformers** : depuis 2017, les modèles basés sur l'attention (BERT, GPT et leurs successeurs) dominent — contexte global, parallélisable, pré-entraînement massif sur des corpus gigantesques puis fine-tuning/adaptation.
+
+### 13.2 Pipeline NLP classique
+
+| Étape | Définition | Exemple |
+|---|---|---|
+| **Tokenisation** | Découper le texte en unités (tokens) — mots, sous-mots, ou caractères | "Le chat dort" → ["Le", "chat", "dort"] |
+| **Stemming** | Réduire un mot à sa racine, parfois de façon brute (peut produire des non-mots) | "mangeons", "manger", "mangé" → "mang" |
+| **Lemmatisation** | Réduire un mot à sa forme canonique (lemme), en tenant compte du contexte grammatical | "mangeons", "manger", "mangé" → "manger" |
+| **POS Tagging** (Part-of-Speech) | Attribuer à chaque mot sa catégorie grammaticale | "Le chat dort" → [DET, NOUN, VERB] |
+| **NER** (Named Entity Recognition) | Identifier les entités nommées (personnes, lieux, organisations, dates) | "Apple a été fondée par Steve Jobs en 1976 à Cupertino" → [Apple: ORG, Steve Jobs: PER, 1976: DATE, Cupertino: LOC] |
+
+```python
+import spacy
+
+nlp = spacy.load("fr_core_news_sm")
+doc = nlp("Apple a été fondée par Steve Jobs en 1976 à Cupertino.")
+
+print("--- Tokenisation, lemmatisation, POS ---")
+for token in doc:
+    print(f"{token.text:12} | lemme: {token.lemma_:12} | POS: {token.pos_}")
+
+print("\n--- Entités nommées (NER) ---")
+for ent in doc.ents:
+    print(f"{ent.text:15} -> {ent.label_}")
+```
+
+**Stemming vs Lemmatisation** : le stemming est une heuristique rapide basée sur des règles de suffixe (souvent algorithme de Porter), pouvant produire des résultats incorrects grammaticalement ("studies" → "studi"). La lemmatisation utilise un dictionnaire et le contexte grammatical pour produire une vraie forme de mot existante ("studies" → "study"). La lemmatisation est plus précise mais plus coûteuse en calcul.
+
+### 13.3 Word Embeddings
+
+**Définition** : représentations vectorielles denses de mots, où des mots sémantiquement proches ont des vecteurs proches dans l'espace.
+
+#### Embeddings statiques : Word2Vec, GloVe, FastText
+
+- **Word2Vec** (Mikolov et al., 2013) : entraîné via deux architectures — **CBOW** (prédire un mot à partir de son contexte) ou **Skip-gram** (prédire le contexte à partir d'un mot). Capture des relations sémantiques remarquables : `vec("roi") - vec("homme") + vec("femme") ≈ vec("reine")`.
+- **GloVe** (Pennington et al., 2014) : combine statistiques globales de co-occurrence de mots dans un corpus avec une factorisation matricielle.
+- **FastText** (Facebook, 2016) : étend Word2Vec en représentant les mots comme des sommes de n-grammes de caractères — gère mieux les mots rares/inconnus (OOV - Out Of Vocabulary) et les langues morphologiquement riches.
+
+**Limite fondamentale des embeddings statiques** : un mot a **un seul vecteur**, peu importe son contexte. "banque" a le même vecteur dans "banque de données" et "banque centrale" — aucune désambiguïsation contextuelle.
+
+#### Embeddings contextuels : BERT et successeurs
+
+Les modèles comme BERT génèrent un vecteur **différent pour chaque occurrence d'un mot**, selon son contexte. Le mot "banque" aura un vecteur différent selon la phrase, capturant le bon sens du mot.
+
+```python
+# Embeddings statiques avec Gensim (Word2Vec pré-entraîné)
+import gensim.downloader as api
+
+model = api.load("glove-wiki-gigaword-100")  # GloVe pré-entraîné, 100 dimensions
+
+print("Similarité 'roi'-'reine':", model.similarity("king", "queen"))
+print("Mots similaires à 'computer':", model.most_similar("computer", topn=5))
+
+# Analogie classique : roi - homme + femme ≈ reine
+result = model.most_similar(positive=["king", "woman"], negative=["man"], topn=3)
+print("king - man + woman ≈", result)
+```
+
+```python
+# Embeddings contextuels avec BERT
+from transformers import AutoTokenizer, AutoModel
+import torch
+
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+model = AutoModel.from_pretrained("bert-base-uncased")
+
+phrase1 = "I went to the bank to deposit money."
+phrase2 = "I sat on the bank of the river."
+
+for phrase in [phrase1, phrase2]:
+    inputs = tokenizer(phrase, return_tensors="pt")
+    with torch.no_grad():
+        outputs = model(**inputs)
+    # Embedding contextuel du token "bank" (position variable selon la phrase)
+    tokens = tokenizer.convert_ids_to_tokens(inputs["input_ids"][0])
+    bank_idx = tokens.index("bank")
+    bank_embedding = outputs.last_hidden_state[0, bank_idx]
+    print(f"'{phrase}'\nEmbedding de 'bank' (5 premières valeurs): {bank_embedding[:5]}\n")
+```
+
+### 13.4 Tâches NLP
+
+| Tâche | Description | Exemple |
+|---|---|---|
+| **Classification** | Attribuer une catégorie à un texte | Analyse de sentiment, classification de spam, détection de langue |
+| **NER** | Extraire les entités nommées | Extraction de noms d'entreprises dans des contrats |
+| **QA** (Question Answering) | Répondre à une question, souvent en extrayant un passage d'un texte source | "Qui a fondé Apple ?" → "Steve Jobs" (extrait du contexte) |
+| **Summarization** | Résumer un texte long | Résumer un article de presse en 3 phrases |
+| **Translation** | Traduire d'une langue à une autre | Français → Anglais |
+| **Sentiment Analysis** | Déterminer la polarité émotionnelle d'un texte | Avis client : positif/négatif/neutre |
+
+### 13.5 Bibliothèques NLP
+
+| Bibliothèque | Points forts |
+|---|---|
+| **NLTK** | Bibliothèque historique, riche en algorithmes classiques (tokenisation, stemming, POS, corpus linguistiques) — surtout pédagogique/recherche |
+| **spaCy** | Optimisée pour la production : rapide, pipelines pré-entraînés multilingues, API orientée objet claire (`Doc`, `Token`, `Span`) |
+| **HuggingFace Transformers** | Accès aux modèles Transformer pré-entraînés modernes (BERT, GPT, T5...) pour toutes les tâches NLP avancées |
+
+### 13.6 Exemple complet NER avec spaCy
+
+```python
+import spacy
+from spacy import displacy
+
+nlp = spacy.load("fr_core_news_sm")
+
+texte = """
+La société Tesla, dirigée par Elon Musk, a annoncé l'ouverture
+d'une nouvelle usine à Berlin en mars 2024. Cette décision intervient
+après une rencontre avec le chancelier allemand à Munich.
+"""
+
+doc = nlp(texte)
+
+print("Entités détectées :")
+for ent in doc.ents:
+    print(f"  - {ent.text:20} | type: {ent.label_:6} | position: [{ent.start_char}:{ent.end_char}]")
+
+# Visualisation HTML (à enregistrer dans un fichier)
+html = displacy.render(doc, style="ent", page=True)
+with open("ner_output.html", "w", encoding="utf-8") as f:
+    f.write(html)
+
+# Extraction ciblée : uniquement les organisations et personnes
+entites_filtrees = [(ent.text, ent.label_) for ent in doc.ents if ent.label_ in ["ORG", "PER"]]
+print("\nOrganisations et personnes:", entites_filtrees)
+```
+
+Sortie typique :
+```
+Entités détectées :
+  - Tesla                | type: ORG    | position: [13:18]
+  - Elon Musk            | type: PER    | position: [33:42]
+  - Berlin               | type: LOC    | position: [89:95]
+  - mars 2024            | type: DATE   | position: [99:108]
+  - Munich               | type: LOC    | position: [...]
+```
+
+### Référence
+- Mikolov, T. et al. (2013) — *"Efficient Estimation of Word Representations in Vector Space"* (Word2Vec), ArXiv:1301.3781.
+- Pennington, J. et al. (2014) — *"GloVe: Global Vectors for Word Representation"*, Stanford NLP.
+- Bojanowski, P. et al. (2016) — *"Enriching Word Vectors with Subword Information"* (FastText), ArXiv:1607.04606.
+- Documentation : [spacy.io](https://spacy.io), [nltk.org](https://www.nltk.org), [huggingface.co/docs](https://huggingface.co/docs)
+- Cours : Stanford CS224N — *Natural Language Processing with Deep Learning*.
+
+---
+
+## Questions d'entretien typiques — Partie 13
+
+**Q1. Quelle est la différence entre stemming et lemmatisation ?**
+> Le stemming applique des règles heuristiques de suppression de suffixes pour obtenir une "racine" approximative, pouvant produire des formes qui ne sont pas des mots réels (ex: "studi"). La lemmatisation utilise un dictionnaire et l'analyse grammaticale du contexte pour ramener le mot à sa forme canonique existante (ex: "studies" → "study"), au prix d'un coût de calcul plus élevé.
+
+**Q2. Pourquoi les embeddings contextuels (BERT) sont-ils supérieurs aux embeddings statiques (Word2Vec) pour la plupart des tâches modernes ?**
+> Les embeddings statiques attribuent un vecteur fixe par mot, indépendamment du contexte, ce qui ne permet pas de désambiguïser les mots polysémiques (ex: "banque" financière vs "banque" d'un fleuve). Les embeddings contextuels génèrent un vecteur différent pour chaque occurrence d'un mot, selon les mots environnants, capturant ainsi le sens spécifique à chaque usage.
+
+**Q3. Qu'est-ce que le problème "Out-Of-Vocabulary" (OOV) et comment FastText l'atténue-t-il ?**
+> Le problème OOV survient quand un mot rencontré en inférence n'était pas présent dans le vocabulaire d'entraînement (le modèle ne peut alors pas lui attribuer de vecteur). FastText représente chaque mot comme une somme de vecteurs de n-grammes de caractères (sous-unités), permettant de construire un vecteur même pour des mots jamais vus, à partir de leurs morceaux connus.
+
+**Q4. Quand préférer spaCy à HuggingFace Transformers pour une tâche NLP en production ?**
+> spaCy est préférable quand on a besoin d'un pipeline rapide, léger et robuste pour des tâches classiques (tokenisation, POS, NER de base) avec des contraintes de latence/coût strictes. HuggingFace Transformers est préférable quand la tâche nécessite la performance des modèles Transformer pré-entraînés modernes (compréhension fine, tâches complexes), au prix d'un coût computationnel plus élevé.
+
+**Q5. Donnez un exemple de tâche NLP de type "extraction" vs "génération" et expliquez la différence.**
+> Le QA extractif (extraire un passage exact d'un texte source répondant à une question) est une tâche d'extraction : la sortie est un sous-ensemble du texte d'entrée, typiquement réalisée par un modèle de type BERT prédisant les positions de début/fin de la réponse. La summarization abstractive (ou la traduction) est une tâche de génération : le modèle (typiquement encoder-decoder comme T5/BART, ou decoder-only comme GPT) produit un nouveau texte, token par token, qui peut reformuler entièrement l'information source.
