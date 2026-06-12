@@ -2147,3 +2147,4 @@ print(f"Perplexity: {perplexity.item():.2f}")
 
 **Q5. Que mesure la perplexité, et pourquoi une perplexité faible est-elle souhaitable ?**
 > La perplexité mesure à quel point la distribution de probabilité prédite par le modèle est "surprise" par la séquence réelle observée — c'est l'exponentielle de la cross-entropy moyenne. Une perplexité faible signifie que le modèle attribue une probabilité élevée aux tokens réellement observés, donc qu'il modélise bien la distribution du langage du corpus évalué.
+>
