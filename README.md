@@ -2147,4 +2147,384 @@ print(f"Perplexity: {perplexity.item():.2f}")
 
 **Q5. Que mesure la perplexité, et pourquoi une perplexité faible est-elle souhaitable ?**
 > La perplexité mesure à quel point la distribution de probabilité prédite par le modèle est "surprise" par la séquence réelle observée — c'est l'exponentielle de la cross-entropy moyenne. Une perplexité faible signifie que le modèle attribue une probabilité élevée aux tokens réellement observés, donc qu'il modélise bien la distribution du langage du corpus évalué.
->
+
+# Guide de Préparation Entretien Data Scientist
+## Partie 12 — Étapes d'un projet Data Science (CRISP-DM + bonnes pratiques modernes)
+
+### 12.1 Vue d'ensemble
+
+**CRISP-DM** (Cross-Industry Standard Process for Data Mining) est une méthodologie créée dans les années 1990, toujours utilisée comme cadre de référence aujourd'hui (souvent enrichie de pratiques MLOps modernes pour le déploiement et le monitoring).
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  1. Business         2. Data         3. EDA        4. Feature     │
+│  Understanding   →   Collection  →   (analyse  →   Engineering    │
+│  (objectif métier)   (sources,        explor.)      (création/    │
+│                       APIs, scraping)                sélection)    │
+│        │                                                  │         │
+│        ▼                                                  ▼         │
+│  5. Preprocessing  →  6. Modeling  →  7. Evaluation  → 8. Interpré- │
+│  (normalisation,      (baseline,      (métriques,     tabilité     │
+│   encoding,            itérations)     CV)            (SHAP, LIME) │
+│   imputation)                                                       │
+│        │                                                            │
+│        ▼                                                            │
+│  9. Déploiement  →  10. Monitoring                                  │
+│  (FastAPI, Docker,   (data drift,                                   │
+│   MLflow, CI/CD)      model drift)                                  │
+│        │                                                            │
+│        └──────────────► retour à l'étape 1 (cycle itératif) ◄──────┘
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Point clé pour l'entretien** : CRISP-DM est **itératif**, pas linéaire. On revient fréquemment en arrière (ex : l'EDA révèle un problème de données qui change l'objectif métier ; le monitoring en production révèle un drift qui déclenche un nouveau cycle de modélisation).
+
+---
+
+### 12.2 Étape 1 — Business Understanding
+
+**Objectif** : traduire un problème métier flou ("on perd des clients") en un problème data science précis et mesurable ("prédire la probabilité de churn dans les 30 jours, avec un seuil de rappel minimal de 70% pour la classe churn").
+
+**Questions clés à se poser** :
+- Quelle décision sera prise à partir de la prédiction ?
+- Quel est le coût d'une erreur (faux positif vs faux négatif) ?
+- Quelle métrique business est réellement impactée (revenu, churn, satisfaction) ?
+- Quelles contraintes de latence/coût/explicabilité existent ?
+
+**Aucun code à cette étape** — c'est un travail de cadrage avec les parties prenantes métier.
+
+---
+
+### 12.3 Étape 2 — Data Collection
+
+**Sources possibles** : bases de données (SQL/NoSQL), APIs internes/externes, web scraping, fichiers plats (CSV, Parquet), data lakes (S3, GCS).
+
+```python
+import pandas as pd
+import requests
+import sqlalchemy
+
+# 1. Depuis une base SQL
+engine = sqlalchemy.create_engine("postgresql://user:password@host:5432/dbname")
+df_sql = pd.read_sql("SELECT * FROM clients WHERE date_inscription > '2023-01-01'", engine)
+
+# 2. Depuis une API REST
+response = requests.get("https://api.exemple.com/transactions", params={"limit": 1000})
+df_api = pd.DataFrame(response.json()["data"])
+
+# 3. Depuis un fichier plat (local ou cloud)
+df_csv = pd.read_csv("data/clients.csv")
+df_parquet = pd.read_parquet("s3://mon-bucket/data/transactions.parquet")
+
+# 4. Web scraping (exemple minimal avec BeautifulSoup)
+from bs4 import BeautifulSoup
+page = requests.get("https://exemple.com/produits")
+soup = BeautifulSoup(page.content, "html.parser")
+prix = [tag.text for tag in soup.select(".prix")]
+```
+
+---
+
+### 12.4 Étape 3 — Exploratory Data Analysis (EDA)
+
+**Objectif** : comprendre la structure, la qualité et les patterns des données avant toute modélisation.
+
+```python
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+df = pd.read_csv("data/clients.csv")
+
+# Vue d'ensemble
+print(df.shape)
+print(df.info())
+print(df.describe())
+
+# Valeurs manquantes
+print(df.isnull().sum() / len(df) * 100)
+
+# Distribution des variables numériques
+df.hist(figsize=(12, 8), bins=30)
+plt.tight_layout()
+plt.savefig("distributions.png")
+
+# Matrice de corrélation
+plt.figure(figsize=(10, 8))
+sns.heatmap(df.select_dtypes(include="number").corr(), annot=True, cmap="coolwarm", fmt=".2f")
+plt.title("Matrice de corrélation")
+plt.savefig("correlation.png")
+
+# Relation entre une variable et la cible
+sns.boxplot(data=df, x="churn", y="anciennete_mois")
+plt.savefig("boxplot_churn.png")
+```
+
+**À détecter pendant l'EDA** : valeurs manquantes, outliers, déséquilibre de classes (cf. Partie 5), corrélations fortes/redondances entre features, distributions asymétriques (skew) nécessitant des transformations (log, Box-Cox).
+
+---
+
+### 12.5 Étape 4 — Feature Engineering
+
+**Objectif** : créer, sélectionner et transformer des variables pour maximiser le signal prédictif.
+
+```python
+import pandas as pd
+import numpy as np
+
+df = pd.DataFrame({
+    "date_inscription": pd.to_datetime(["2022-01-15", "2023-06-01"]),
+    "date_derniere_commande": pd.to_datetime(["2024-01-01", "2024-01-01"]),
+    "montant_total": [1200, 300],
+    "nb_commandes": [15, 2]
+})
+
+today = pd.Timestamp("2024-01-15")
+
+# Création de features
+df["anciennete_jours"] = (today - df["date_inscription"]).dt.days
+df["jours_depuis_derniere_commande"] = (today - df["date_derniere_commande"]).dt.days
+df["panier_moyen"] = df["montant_total"] / df["nb_commandes"]
+df["frequence_achat"] = df["nb_commandes"] / (df["anciennete_jours"] / 30)  # commandes/mois
+
+# Feature de log-transform (pour réduire l'asymétrie)
+df["log_montant_total"] = np.log1p(df["montant_total"])
+
+print(df)
+```
+
+**Sélection de features** : `SelectKBest`, importance des features d'un modèle d'arbre, ou élimination récursive (`RFE`).
+
+```python
+from sklearn.feature_selection import SelectKBest, f_classif
+import numpy as np
+
+X = np.random.rand(200, 10)
+y = np.random.randint(0, 2, 200)
+
+selector = SelectKBest(score_func=f_classif, k=5)
+X_selected = selector.fit_transform(X, y)
+print("Features sélectionnées (indices):", selector.get_support(indices=True))
+```
+
+---
+
+### 12.6 Étape 5 — Preprocessing
+
+**Objectif** : préparer les données dans un format exploitable par les algorithmes (normalisation, encodage des catégories, imputation des valeurs manquantes — voir aussi Partie 3, section Scikit-learn, pour le pattern `Pipeline`/`ColumnTransformer`).
+
+```python
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, OneHotEncoder, OrdinalEncoder
+from sklearn.impute import SimpleImputer, KNNImputer
+
+# Normalisation (centrer-réduire) — utile pour les modèles sensibles à l'échelle
+# (régression linéaire, SVM, réseaux de neurones, KNN, PCA)
+scaler = StandardScaler()
+
+# Min-Max scaling — utile quand on veut une plage [0,1] fixe (ex : images, certains réseaux)
+minmax = MinMaxScaler()
+
+# Encodage des catégories
+onehot = OneHotEncoder(handle_unknown="ignore")  # variables nominales sans ordre
+ordinal = OrdinalEncoder()  # variables ordinales (ex : "faible"<"moyen"<"élevé")
+
+# Imputation
+imputer_median = SimpleImputer(strategy="median")  # robuste aux outliers
+imputer_knn = KNNImputer(n_neighbors=5)  # imputation basée sur la similarité entre lignes
+```
+
+**Note** : les modèles à base d'arbres (Random Forest, XGBoost, LightGBM) sont **insensibles à l'échelle** des variables numériques (pas besoin de `StandardScaler`), mais requièrent quand même un encodage des variables catégorielles.
+
+---
+
+### 12.7 Étape 6 — Modeling
+
+**Bonne pratique** : toujours commencer par une **baseline simple** (régression logistique, modèle constant prédisant la classe majoritaire, ou moyenne pour la régression) avant des modèles complexes — cela donne un point de référence et permet de détecter rapidement des problèmes de pipeline.
+
+```python
+from sklearn.dummy import DummyClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+import xgboost as xgb
+
+# Baseline naïve
+baseline = DummyClassifier(strategy="most_frequent")
+
+# Baseline simple interprétable
+logreg = LogisticRegression(max_iter=1000)
+
+# Modèles plus complexes
+rf = RandomForestClassifier(n_estimators=200, random_state=42)
+xgb_model = xgb.XGBClassifier(n_estimators=200, learning_rate=0.05, random_state=42)
+
+models = {"baseline": baseline, "logreg": logreg, "random_forest": rf, "xgboost": xgb_model}
+```
+
+---
+
+### 12.8 Étape 7 — Evaluation
+
+Voir Partie 11 pour le détail des métriques. À cette étape : comparer les modèles via cross-validation (Partie 6) sur les métriques pertinentes au problème métier défini à l'étape 1.
+
+```python
+from sklearn.model_selection import cross_val_score, StratifiedKFold
+import numpy as np
+
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+for name, model in models.items():
+    scores = cross_val_score(model, X, y, cv=cv, scoring="f1")
+    print(f"{name}: F1 = {scores.mean():.3f} ± {scores.std():.3f}")
+```
+
+---
+
+### 12.9 Étape 8 — Interprétabilité (SHAP, LIME)
+
+**SHAP** (SHapley Additive exPlanations) : basé sur la théorie des jeux, attribue à chaque feature une contribution à la prédiction, garantissant des propriétés mathématiques cohérentes (la somme des contributions = différence entre la prédiction et la valeur moyenne).
+
+**LIME** (Local Interpretable Model-agnostic Explanations) : approxime localement le modèle complexe par un modèle simple (linéaire) autour d'une prédiction spécifique, pour expliquer cette prédiction individuelle.
+
+```python
+import shap
+import xgboost as xgb
+import numpy as np
+
+X = np.random.rand(200, 5)
+y = (X[:, 0] + X[:, 1] > 1).astype(int)
+
+model = xgb.XGBClassifier().fit(X, y)
+
+explainer = shap.TreeExplainer(model)
+shap_values = explainer.shap_values(X)
+
+# Importance globale des features
+shap.summary_plot(shap_values, X, show=False)
+import matplotlib.pyplot as plt
+plt.savefig("shap_summary.png")
+
+# Explication d'une prédiction individuelle
+print("Contribution de chaque feature pour l'exemple 0:", shap_values[0])
+```
+
+```python
+# LIME : explication locale
+from lime.lime_tabular import LimeTabularExplainer
+
+explainer_lime = LimeTabularExplainer(
+    X, feature_names=[f"feature_{i}" for i in range(5)],
+    class_names=["classe_0", "classe_1"], mode="classification"
+)
+
+explanation = explainer_lime.explain_instance(X[0], model.predict_proba, num_features=5)
+print(explanation.as_list())
+```
+
+---
+
+### 12.10 Étape 9 — Déploiement (FastAPI, Docker, MLflow, CI/CD)
+
+**FastAPI** : exposer le modèle via une API REST.
+
+```python
+# app.py
+from fastapi import FastAPI
+from pydantic import BaseModel
+import joblib
+import numpy as np
+
+app = FastAPI()
+model = joblib.load("model.pkl")
+
+class PredictionInput(BaseModel):
+    age: float
+    salaire: float
+    anciennete: float
+
+@app.post("/predict")
+def predict(data: PredictionInput):
+    X = np.array([[data.age, data.salaire, data.anciennete]])
+    proba = model.predict_proba(X)[0, 1]
+    return {"probabilite_churn": float(proba)}
+```
+
+**Docker** : conteneuriser l'application pour un déploiement reproductible.
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app.py model.pkl ./
+
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+**MLflow** : tracker les expériences (paramètres, métriques, artefacts) et versionner les modèles.
+
+```python
+import mlflow
+import mlflow.sklearn
+
+mlflow.set_experiment("churn_prediction")
+
+with mlflow.start_run():
+    model.fit(X_train, y_train)
+
+    mlflow.log_param("n_estimators", 200)
+    mlflow.log_param("max_depth", 5)
+    mlflow.log_metric("f1_score", 0.82)
+
+    mlflow.sklearn.log_model(model, "model")
+```
+
+**CI/CD** : pipeline automatisé (ex : GitHub Actions) qui exécute les tests, entraîne/valide le modèle, et déploie automatiquement si les métriques dépassent un seuil défini.
+
+---
+
+### 12.11 Étape 10 — Monitoring (Data Drift, Model Drift)
+
+**Data drift** : la distribution des données d'entrée en production diverge de celle utilisée pendant l'entraînement (ex : nouveaux profils de clients après une campagne marketing).
+
+**Model drift (concept drift)** : la relation entre les features et la cible change dans le temps (ex : les comportements d'achat changent fondamentalement après une crise économique), même si la distribution des features reste stable.
+
+```python
+# Exemple : détection de drift avec evidently
+from evidently.report import Report
+from evidently.metric_preset import DataDriftPreset
+
+report = Report(metrics=[DataDriftPreset()])
+report.run(reference_data=df_train, current_data=df_production)
+report.save_html("data_drift_report.html")
+```
+
+**Bonnes pratiques de monitoring** :
+- Suivre la distribution des features en production vs entraînement (tests statistiques : Kolmogorov-Smirnov, PSI - Population Stability Index)
+- Suivre les métriques de performance en production (quand les vrais labels deviennent disponibles, avec un délai)
+- Définir des seuils d'alerte et un processus de ré-entraînement automatique ou semi-automatique
+
+### Référence
+- [CRISP-DM 1.0 process guide](https://www.the-modeling-agency.com/crisp-dm.pdf) — document de référence historique de la méthodologie.
+- Documentation : [shap.readthedocs.io](https://shap.readthedocs.io), [mlflow.org/docs](https://mlflow.org/docs), [fastapi.tiangolo.com](https://fastapi.tiangolo.com), [docs.evidentlyai.com](https://docs.evidentlyai.com)
+- Lundberg, S. & Lee, S. (2017) — *"A Unified Approach to Interpreting Model Predictions"* (SHAP), ArXiv:1705.07874.
+
+---
+
+## Questions d'entretien typiques — Partie 12
+
+**Q1. Pourquoi CRISP-DM est-il décrit comme un processus itératif et non linéaire ?**
+> Parce que les découvertes faites à une étape (ex : l'EDA révèle que la donnée nécessaire n'est pas disponible, ou le monitoring détecte un drift) obligent souvent à revenir à des étapes précédentes (collecte de données, redéfinition de l'objectif métier, ré-entraînement) — le projet n'avance pas en ligne droite.
+
+**Q2. Pourquoi toujours commencer par une baseline simple avant un modèle complexe ?**
+> La baseline fournit un point de référence pour juger si la complexité supplémentaire apporte un gain réel, permet de détecter rapidement des erreurs de pipeline (si même une régression logistique simple échoue à dépasser un modèle constant, le problème est probablement ailleurs que dans le choix du modèle), et donne un résultat exploitable rapidement.
+
+**Q3. Quelle est la différence entre SHAP et LIME ?**
+> SHAP est basé sur la théorie des jeux (valeurs de Shapley) et fournit des explications avec des garanties théoriques de cohérence (les contributions individuelles somment à la différence entre la prédiction et la valeur de référence). LIME approxime localement le modèle par un modèle linéaire simple autour d'un point donné — plus rapide mais moins rigoureux théoriquement, et les explications peuvent varier entre exécutions.
+
+**Q4. Quelle est la différence entre data drift et model drift (concept drift) ?**
+> Le data drift concerne un changement dans la distribution des features d'entrée (ex : l'âge moyen des clients augmente), sans que la relation features→cible change nécessairement. Le concept drift (model drift) concerne un changement dans la relation elle-même entre features et cible (ex : un même profil client a maintenant un comportement d'achat différent), ce qui dégrade la performance du modèle même si la distribution des features reste identique.
+
+**Q5. Pourquoi versionner les modèles (via MLflow ou équivalent) est-il important en production ?**
+> Cela permet de tracer quel modèle (avec quels hyperparamètres, quelles données d'entraînement, quelles métriques) est déployé à un instant donné, de revenir rapidement à une version antérieure en cas de problème (rollback), et d'assurer la reproductibilité et l'auditabilité des décisions du modèle — particulièrement important dans des contextes réglementés.
